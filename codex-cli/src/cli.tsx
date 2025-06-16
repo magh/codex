@@ -36,6 +36,7 @@ import {
   loadConfig,
   PRETTY_PRINT,
   INSTRUCTIONS_FILEPATH,
+  getApiKey,
 } from "./utils/config";
 import {
   getApiKey as fetchApiKey,
@@ -328,21 +329,8 @@ try {
   // ignore errors
 }
 
-// Get provider-specific API key if not OpenAI
-if (provider.toLowerCase() !== "openai") {
-  const providerInfo = providers[provider.toLowerCase()];
-  if (providerInfo) {
-    const providerApiKey = process.env[providerInfo.envKey];
-    if (providerApiKey) {
-      apiKey = providerApiKey;
-    }
-  }
-}
-
-// Only proceed with OpenAI auth flow if:
-// 1. Provider is OpenAI and no API key is set, or
-// 2. Login flag is explicitly set
-if (provider.toLowerCase() === "openai" && !apiKey) {
+// Only use OpenAI auth flow for OpenAI provider
+if (provider.toLowerCase() === "openai") {
   if (cli.flags.login) {
     apiKey = await fetchApiKey(client.issuer, client.client_id);
     try {
@@ -356,13 +344,19 @@ if (provider.toLowerCase() === "openai" && !apiKey) {
     } catch {
       /* ignore */
     }
-  } else {
+  } else if (!apiKey) {
     apiKey = await fetchApiKey(client.issuer, client.client_id);
   }
+} else {
+  // For other providers, get API key from environment
+  apiKey = getApiKey(provider) || "";
 }
 
 // Ensure the API key is available as an environment variable for legacy code
-process.env["OPENAI_API_KEY"] = apiKey;
+// Only set OPENAI_API_KEY for OpenAI provider
+if (provider.toLowerCase() === "openai") {
+  process.env["OPENAI_API_KEY"] = apiKey;
+}
 
 // Only attempt credit redemption for OpenAI provider
 if (cli.flags.free && provider.toLowerCase() === "openai") {
@@ -386,33 +380,37 @@ const NO_API_KEY_REQUIRED = new Set(["ollama"]);
 
 // Skip API key validation for providers that don't require an API key
 if (!apiKey && !NO_API_KEY_REQUIRED.has(provider.toLowerCase())) {
-  // eslint-disable-next-line no-console
-  console.error(
-    `\n${chalk.red(`Missing ${provider} API key.`)}\n\n` +
-      `Set the environment variable ${chalk.bold(
-        `${provider.toUpperCase()}_API_KEY`,
-      )} ` +
-      `and re-run this command.\n` +
-      `${
-        provider.toLowerCase() === "openai"
-          ? `You can create a key here: ${chalk.bold(
-              chalk.underline("https://platform.openai.com/account/api-keys"),
-            )}\n`
-          : provider.toLowerCase() === "azure"
-            ? `You can create a ${chalk.bold(
-                `${provider.toUpperCase()}_OPENAI_API_KEY`,
-              )} ` +
-              `in Azure AI Foundry portal at ${chalk.bold(chalk.underline("https://ai.azure.com"))}.\n`
+  // For non-OpenAI providers, check if the provider-specific API key exists
+  const providerApiKey = getApiKey(provider);
+  if (!providerApiKey) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `\n${chalk.red(`Missing ${provider} API key.`)}\n\n` +
+        `Set the environment variable ${chalk.bold(
+          `${provider.toUpperCase()}_API_KEY`,
+        )} ` +
+        `and re-run this command.\n` +
+        `${
+          provider.toLowerCase() === "openai"
+            ? `You can create a key here: ${chalk.bold(
+                chalk.underline("https://platform.openai.com/account/api-keys"),
+              )}\n`
             : provider.toLowerCase() === "gemini"
               ? `You can create a ${chalk.bold(
                   `${provider.toUpperCase()}_API_KEY`,
                 )} ` + `in the ${chalk.bold(`Google AI Studio`)}.\n`
-              : `You can create a ${chalk.bold(
-                  `${provider.toUpperCase()}_API_KEY`,
-                )} ` + `in the ${chalk.bold(`${provider}`)} dashboard.\n`
-      }`,
-  );
-  process.exit(1);
+              : provider.toLowerCase() === "azure"
+                ? `Set your Azure OpenAI API key as ${chalk.bold(
+                    `AZURE_OPENAI_API_KEY`,
+                  )}\n`
+                : `You can create a ${chalk.bold(
+                    `${provider.toUpperCase()}_API_KEY`,
+                  )} ` + `in the ${chalk.bold(`${provider}`)} dashboard.\n`
+        }`,
+    );
+    process.exit(1);
+  }
+  apiKey = providerApiKey;
 }
 
 const flagPresent = Object.hasOwn(cli.flags, "disableResponseStorage");
